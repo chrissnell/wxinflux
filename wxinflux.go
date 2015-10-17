@@ -110,7 +110,7 @@ func (d *DavisSi1000) connectToSerialSi1000() {
 func (d *DavisSi1000) readReports(reportChan chan<- WxReport) {
 	for {
 		// We recreate a json.Decoder with each loop because the connection may have dropped
-		// and if it has, we'll need a fresh Decoder over that new net.Conn
+		// and if it has, we'll need a fresh Decoder over that new Reader
 		dec := json.NewDecoder(d.conn)
 
 		for {
@@ -133,6 +133,9 @@ func (d *DavisSi1000) storeReports(reportChan <-chan WxReport, ic influx.Client)
 	for {
 		select {
 		case report := <-reportChan:
+
+			// Create a InfluxDB batch of points.  We only receive readings every
+			// 2.5s so there's no need to batch more than one at a time.
 			bp, err := influx.NewBatchPoints(influx.BatchPointsConfig{
 				Database:  d.config.InfluxDB.InfluxDBName,
 				Precision: "s",
@@ -141,6 +144,7 @@ func (d *DavisSi1000) storeReports(reportChan <-chan WxReport, ic influx.Client)
 				log.Println("Error logging report to InfluxDB:", err)
 				continue
 			}
+
 			tags := map[string]string{"transmitter-id": string(report.TransmitterID)}
 			fields := map[string]interface{}{
 				"wind_speed":      report.WindSpeed,
@@ -155,13 +159,18 @@ func (d *DavisSi1000) storeReports(reportChan <-chan WxReport, ic influx.Client)
 				"rainfall":        report.Rainfall,
 			}
 
+			// Build our InfluxDB point from our tags and fields
 			pt := influx.NewPoint("wxreport", tags, fields, time.Now())
+			// ...and add it to our batch
 			bp.AddPoint(pt)
+
+			// Write the batch to the InfluxDB client
 			err = ic.Write(bp)
 			if err != nil {
 				log.Println("Error logging data point to InfluxDB:", err)
 				continue
 			}
+			// Log this report to the console
 			log.Printf("Received report: %+v\n", report)
 
 		}
@@ -181,7 +190,7 @@ func generateWxReport(p *WxPacket) WxReport {
 		WindChill:      windchillFahrenheit(p.Temperature, float32(p.WindSpeed)),
 		UVIndex:        p.UVIndex,
 		SolarRadiation: p.SolarRadiation,
-		Rainfall:       float32(p.RainSpoons) * float32(0.1),
+		Rainfall:       float32(p.RainSpoons) * float32(0.1), // 1 spoon == 0.1" rainfall
 	}
 	return r
 }
@@ -190,11 +199,13 @@ func main() {
 	cfgFile := flag.String("config", "config.yaml", "Path to config file (default: ./config.yaml)")
 	flag.Parse()
 
+	// reportChan is used to send wx reports from the reader to the DB recorder
 	reportChan := make(chan WxReport)
 
+	// Get a new DavisSi1000 object
 	d := NewDavisSi1000()
 
-	// Read our server configuration
+	// Read our server configuration from our YAML config file
 	filename, _ := filepath.Abs(*cfgFile)
 	cfg, err := config.New(filename)
 	if err != nil {
@@ -210,7 +221,9 @@ func main() {
 		Password: d.config.InfluxDB.InfluxPass,
 	})
 
+	// Connect to the Si1000.  Subsequent re-connects are handled within readReports()
 	d.connectToSerialSi1000()
+
 	go d.storeReports(reportChan, ic)
 	d.readReports(reportChan)
 }
