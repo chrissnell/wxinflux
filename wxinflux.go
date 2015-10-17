@@ -124,7 +124,11 @@ func (d *DavisSi1000) readReports(reportChan chan<- WxReport) {
 				break
 			}
 			report := generateWxReport(&packet)
-			reportChan <- report
+			// Sometimes USB-Serial blips can cause a bunch of zeroed-out readings and we don't want to record these.
+			// So, we check for them and only send the report if it appears valid.
+			if report.Temperature != 0.0 && report.Humidity != 0.0 && report.WindDir != 0 && report.Dewpoint != 0.0 {
+				reportChan <- report
+			}
 		}
 	}
 }
