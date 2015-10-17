@@ -1,0 +1,8 @@
+influxdb:
+  url: http://127.0.0.1:8086
+  dbname: wx
+  user: wx
+  pass: thepassword
+si2000:
+  device: /dev/ttyUSB0
+  baud: 57600
